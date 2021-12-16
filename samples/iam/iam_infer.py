@@ -1,33 +1,26 @@
-import os, json, time
-import xml
+import os, json
+import random
 import numpy as np
 from mrcnn import model as modellib, utils, visualize
 from PIL import Image, ImageDraw
 from samples.coco import coco
-from mrcnn.config import Config
-import skimage.draw
+import skimage
 
 # Pocet tried v datasete
 NUM_CLASSES = 1
-#NUM_CLASSES = 13550
 
 # Relativna cesta k .h5 suboru s vahami
-WEIGHTS_FILE = 'mask_rcnn_coco.h5'
+WEIGHTS_FILE = None
 
-# Relativna cesta k JSON anotaciam (trenovacie data)
-TRAIN_ANNOTATIONS_FILE = './train.json'
-
-# Relativna cesta k adresaru so subormi v anotaciach
-TRAIN_ANNOTATION_IMAGE_DIR = './forms'
-
-# Relativna cesta k JSON anotaciam (validacne data)
-VALIDATION_ANNOTATIONS_FILE = './val.json'
+# Relativna cesta k JSON anotaciam (testovacie data)
+ANNOTATIONS_FILE = './val.json'
 
 # Relativna cesta k adresaru so subormi v anotaciach
-VALIDATION_ANNOTATION_IMAGE_DIR = './forms'
+ANNOTATION_IMAGE_DIR = './forms'
 
-# Pocet trenovacich epoch
-NUM_EPOCHS = 50
+# Relativna cesta k adresaru s obrazkami
+TEST_IMAGE_DIR = './forms'
+
 MODEL_NAME = 'model_mrcnn'
 
 # Nastavenie ROOT_DIR premennej na rootovsky priecinok (mimo git repozitara MASK_RCNN)
@@ -37,11 +30,11 @@ ROOT_DIR = os.getcwd()
 MODEL_DIR = os.path.join(ROOT_DIR, 'logs')
 
 
-class TrainConfig(coco.CocoConfig):
+class InferenceConfig(coco.CocoConfig):
     # Rozpoznavacie meno
     NAME = MODEL_NAME
 
-    # Trenovat sa bude jeden obrazok na jednej GPU (batch_size je 1 -> GPUs * images/GPU)
+    # Testovat sa bude jeden obrazok na jednej GPU (batch_size je 1 -> GPUs * images/GPU)
     GPU_COUNT = 1
     IMAGES_PER_GPU = 1
 
@@ -53,11 +46,6 @@ class TrainConfig(coco.CocoConfig):
     IMAGE_MAX_DIM = 512
 
     IMAGE_RESIZE_MODE = "square"
-    #IMAGE_SHAPE = [512, 359, 3]
-
-    # Pocet trenovacich epoch (pocet_vzoriek/batch_size; batch_size=pocet_tried)
-    STEPS_PER_EPOCH = 1232
-    VALIDATION_STEPS = 307
 
     # Matterport povodne pouzival resnet101
     BACKBONE = 'resnet101'
@@ -73,7 +61,7 @@ class TrainConfig(coco.CocoConfig):
     DETECTION_MIN_CONFIDENCE = 0.1
 
 
-#TrainConfig().display()
+#InferenceConfig().display()
 
 
 class CocoLikeDataset(utils.Dataset):
@@ -152,26 +140,35 @@ class CocoLikeDataset(utils.Dataset):
         return mask, class_ids
 
 
-dataset_train = CocoLikeDataset()
-dataset_train.load_data(TRAIN_ANNOTATIONS_FILE, TRAIN_ANNOTATION_IMAGE_DIR)
-dataset_train.prepare()
+dataset_test = CocoLikeDataset()
+dataset_test.load_data(ANNOTATIONS_FILE, ANNOTATION_IMAGE_DIR)
+dataset_test.prepare()
+class_names = dataset_test.class_names
 
-dataset_val = CocoLikeDataset()
-dataset_val.load_data(VALIDATION_ANNOTATIONS_FILE, VALIDATION_ANNOTATION_IMAGE_DIR)
-dataset_val.prepare()
+# Vytvorenie testovacieho modelu
+model = modellib.MaskRCNN(mode='inference', config=InferenceConfig(), model_dir=MODEL_DIR)
 
-# Vytvorenie trenovacieho modelu
-model = modellib.MaskRCNN(mode='training', config=TrainConfig(), model_dir=MODEL_DIR)
-
-if WEIGHTS_FILE is not None:
-    #model.load_weights(WEIGHTS_FILE, by_name=True)
+if WEIGHTS_FILE is None:
+    #model.load_weights(model.find_last(), by_name=True)
+    model.load_weights('mask_rcnn_model_resized_0025.h5', by_name=True)
+    print('Predosle vahy uspesne nacitane')
+else:
     model.load_weights(WEIGHTS_FILE, by_name=True, exclude=[
         "mrcnn_class_logits", "mrcnn_bbox_fc",
         "mrcnn_bbox", "mrcnn_mask"])
     print('Vahy z COCO datasetu uspesne nacitane')
 
-start_train = time.time()
-model.train(dataset_train, dataset_val, learning_rate=TrainConfig().LEARNING_RATE, epochs=NUM_EPOCHS, layers='heads')
-end_train = time.time()
-minutes = round((end_train - start_train) / 60, 2)
-print(f'Trenovanie trvalo {minutes} minut')
+# Nacitanie nahodneho obrazka na testovanie
+file_names = next(os.walk(TEST_IMAGE_DIR))[2]
+image = skimage.io.imread(os.path.join(TEST_IMAGE_DIR, random.choice(file_names)))
+if image.ndim != 3:
+    image = skimage.color.gray2rgb(image)
+if image.shape[-1] == 4:
+    image = image[..., :3]
+
+# Detekcia
+results = model.detect([image], verbose=2)
+
+# Vizualizacia vysledkov
+r = results[0]
+visualize.display_instances(image, r['rois'], r['masks'], r['class_ids'], class_names, r['scores'])

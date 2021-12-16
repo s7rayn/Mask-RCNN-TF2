@@ -1,0 +1,3 @@
+[submodule "IAM-to-Mask-RCNN"]
+	path = IAM-to-Mask-RCNN
+	url = git@github.com:s7rayn/IAM-to-Mask-RCNN.git
